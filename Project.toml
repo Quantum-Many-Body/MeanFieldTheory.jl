@@ -1,0 +1,7 @@
+name = "MeanFieldTheory"
+uuid = "658ae006-d3a7-46f4-8340-f5eff50cf672"
+authors = ["waltergu <waltergu1989@gmail.com> and contributors"]
+version = "1.0.0-DEV"
+
+[compat]
+julia = "1.10"
