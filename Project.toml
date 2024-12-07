@@ -3,5 +3,17 @@ uuid = "658ae006-d3a7-46f4-8340-f5eff50cf672"
 authors = ["waltergu <waltergu1989@gmail.com> and contributors"]
 version = "1.0.0-DEV"
 
+[deps]
+ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+QuantumLattices = "78ae1a1f-1d5d-5174-b61c-66e31b2346dc"
+TightBindingApproximation = "d3576f78-cb9d-4774-9dc5-b247cf392ff4"
+
 [compat]
+ChainRulesCore = "1.25.0"
+Distributed = "1.11.0"
+LinearAlgebra = "1.11.0"
+QuantumLattices = "0.10.1"
+TightBindingApproximation = "0.2.0"
 julia = "1.10"

@@ -1,6 +1,6 @@
-using MeanFieldTheory
 using Test
+using SafeTestsets
 
-@testset "MeanFieldTheory.jl" begin
-    # Write your tests here.
+@safetestset "MeanFieldTheory" begin
+    include("MeanFieldTheory.jl")
 end
