@@ -3,91 +3,74 @@ module MeanFieldTheory
 using ChainRulesCore: HasReverseMode, NoTangent, RuleConfig, rrule_via_ad
 using Distributed: @distributed
 using LinearAlgebra: eigvals
-using QuantumLattices: AbstractLattice, BrillouinZone, update
-using TightBindingApproximation: AbstractTBA, Fermionic
+using QuantumLattices: BrillouinZone, kind, update
+using TightBindingApproximation: CompositeTBA, Fermionic, SimpleTBA, TBA, TBAKind
 
 import ChainRulesCore: rrule
-import QuantumLattices: Hamiltonian, Parameters, dimension, matrix, update!
+import QuantumLattices: Parameters, dimension, matrix, scalartype, update!
 
-export SCMF, SCMFHamiltonian, Ω, constant
+export SCMF, Ω, constant
 
-"""
-"""
-mutable struct SCMFHamiltonian{F<:Hamiltonian, I<:Parameters, M<:Hamiltonian, C<:Function} <: Hamiltonian
+const PureTBA{K<:TBAKind} = Union{SimpleTBA{K}, CompositeTBA{K}}
+
+mutable struct SCMF{K<:Fermionic, F<:PureTBA{K}, I<:Parameters, M<:PureTBA{K}, C<:Function, B<:BrillouinZone} <: TBA{K, F, Nothing}
+    T::Float64
     const free::F
     interactions::I
     const meanfields::M
     const constant::C
-end
-@inline Base.valtype(::Type{<:SCMFHamiltonian{F, <:Parameters, M}}) where {F<:Hamiltonian, M<:Hamiltonian} = promote_type(valtype(F), valtype(M))
-@inline Parameters(hamiltonian::SCMFHamiltonian) = (; Parameters(hamiltonian.free)..., hamiltonian.interactions..., Parameters(hamiltonian.meanfields)...)
-@inline function update!(hamiltonian::SCMFHamiltonian; k=nothing, parameters...)
-    if length(parameters)>0
-        update!(hamiltonian.free; parameters...)
-        hamiltonian.interactions = update(hamiltonian.interactions; parameters...)
-        update!(hamiltonian.meanfields; parameters...)
+    const brillouinzone::B
+    function SCMF(T::Real, free::PureTBA, interactions::Parameters, meanfields::TBA, constant::Function, brillouinzone::BrillouinZone)
+        @assert kind(free)==kind(meanfields) && free.lattice==meanfields.lattice && dimension(free)==dimension(meanfields) "SCMF error: mismatched free part and meanfields part."
+        new{typeof(kind(free)), typeof(free), typeof(interactions), typeof(meanfields), typeof(constant), typeof(brillouinzone)}(T, free, interactions, meanfields, constant, brillouinzone)
     end
-    return hamiltonian
 end
-@inline dimension(hamiltonian::SCMFHamiltonian) = dimension(hamiltonian.free)
-@inline function matrix(hamiltonian::SCMFHamiltonian; k=nothing, kwargs...)
-    m₁ = matrix(hamiltonian.free; k=k, kwargs...)
-    m₂ = matrix(hamiltonian.meanfields; k=k, kwargs...)
+@inline scalartype(::Type{<:SCMF{<:Fermionic, F, M}}) where {F<:PureTBA, M<:PureTBA} = promote_type(scalartype(F), scalartype(M))
+@inline Parameters(scmf::SCMF) = (; T=scmf.T, Parameters(scmf.free)..., scmf.interactions..., Parameters(scmf.meanfields)...)
+@inline function update!(scmf::SCMF; parameters...)
+    if length(parameters)>0
+        scmf.T = get(parameters, :T, scmf.T)
+        update!(scmf.free; parameters...)
+        scmf.interactions = update(scmf.interactions; parameters...)
+        update!(scmf.meanfields; parameters...)
+    end
+    return scmf
+end
+@inline dimension(scmf::SCMF) = dimension(scmf.free)
+@inline function matrix(scmf::SCMF, k::Union{AbstractVector{<:Number}, Nothing}=nothing; kwargs...)
+    m₁ = matrix(scmf.free, k; kwargs...)
+    m₂ = matrix(scmf.meanfields, k; kwargs...)
     return m₁ + m₂
 end
-@inline function constant(hamiltonian)
-    return hamiltonian.constant(values(hamiltonian.interactions)..., values(Parameters(hamiltonian.meanfields))...)
-end
-
-"""
-"""
-@inline function Hamiltonian(free::Hamiltonian, interactions::Parameters, meanfields::Hamiltonian, constant::Function)
-    @assert dimension(free)==dimension(meanfields) "Hamiltonian error: mismatched dimension of the free part and the mean-field part."
-    return SCMFHamiltonian(free, interactions, meanfields, constant)
-end
-
-"""
-"""
-mutable struct SCMF{K<:Fermionic, L<:AbstractLattice, B<:BrillouinZone, H<:SCMFHamiltonian} <: AbstractTBA{K, H, Nothing}
-    const lattice::L
-    const brillouinzone::B
-    const H::H
-    T::Float64
-    function SCMF{K}(lattice::AbstractLattice, brillouinzone::BrillouinZone, H::SCMFHamiltonian, T::Real=0.0) where {K<:Fermionic}
-        new{K, typeof(lattice), typeof(brillouinzone), typeof(H)}(lattice, brillouinzone, H, T)
-    end
-end
-@inline Parameters(scmf::SCMF) = (; T=scmf.T, Parameters(scmf.H)...)
-@inline function update!(scmf::SCMF; kwargs...)
-    scmf.T = get(kwargs, :T, scmf.T)
-    update!(scmf.H; kwargs...)
-    return scmf
+@inline function constant(scmf::SCMF)
+    return scmf.constant(values(scmf.interactions)..., values(Parameters(scmf.meanfields))...)
 end
 
 """
 """
 function (scmf::SCMF)(vs::Number...; kwargs...)
-    update!(scmf; Parameters{keys(Parameters(scmf.H.meanfields))}(vs...)...)
-    result = @distributed (+) for k in scmf.brillouinzone
+    update!(scmf; Parameters{keys(Parameters(scmf.meanfields))}(vs...)...)
+    result = (@distributed (+) for k in scmf.brillouinzone
         temp = 0.0
-        for e in eigvals(scmf; k=k, kwargs...)
+        for e in eigvals(scmf, k; kwargs...)
             temp += Ω(e, scmf.T; kwargs...)
         end
         temp
-    end
+    end)::Float64
     result /= length(scmf.brillouinzone)
-    result += constant(scmf.H)
+    result += constant(scmf)
     return result
 end
+
 function rrule(config::RuleConfig{>:HasReverseMode}, scmf::SCMF, vs::Number...; kwargs...)
     vs = promote(vs...)
-    update!(scmf; Parameters{keys(Parameters(scmf.H.meanfields))}(vs...)...)
+    update!(scmf; Parameters{keys(Parameters(scmf.meanfields))}(vs...)...)
     primal = 0.0
     dvs = zeros(eltype(vs), length(vs))
     Δes = zeros(eltype(vs), length(vs))
     Δms = []
     for k in scmf.brillouinzone
-        m = matrix(scmf; k=k, kwargs...)
+        m = matrix(scmf, k; kwargs...)
         es, es_pullback = rrule(eigvals, m)
         for (i, e) in enumerate(es)
             ω, ω_pullback = rrule(Ω, e, scmf.T; kwargs...)
@@ -103,7 +86,7 @@ function rrule(config::RuleConfig{>:HasReverseMode}, scmf::SCMF, vs::Number...; 
     for i in eachindex(dvs)
         dvs[i] /= length(scmf.brillouinzone)
     end
-    c, c_pullback = rrule_via_ad(config, scmf.H.constant, values(scmf.H.interactions)..., vs...)
+    c, c_pullback = rrule_via_ad(config, scmf.constant, values(scmf.interactions)..., vs...)
     primal += c
     for (i, dc) in enumerate(c_pullback(1.0)[end-length(vs):end])
         dvs[i] += Δc[index]
